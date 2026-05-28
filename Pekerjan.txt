@@ -1,3 +1,4 @@
+# pekerjaan yang di lakukan di pp
 Memperbaiki jalur `Laptop Anda -> Server TURN Publik (berada di luar negeri/jauh) via TCP -> Cloudflare -> Server PC Anda -> Diproses -> Cloudflare -> TURN -> Laptop`.
 
 # Mencari tau bagaimana bobot di buat ringan
