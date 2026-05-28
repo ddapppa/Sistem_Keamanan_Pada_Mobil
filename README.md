@@ -16,8 +16,9 @@ Sistem ini dirancang berasitektur **Hybrid Spatial-Temporal**. Wajah pengemudi a
 
 ## 📂 Struktur Direktori & Modul
 Sistem ini dibangun dengan pendekatan modular menggunakan Jupyter Notebook untuk eksperimen bertahap dan file Python murni untuk sistem operasional. Berikut adalah rincian fungsional file utamanya:
-* **`01` s/d `04`: Analisis Eksploratif (EDA)** - Modul persiapan & penelusuran data pada *MRL Dataset* dan *NTHUD Dataset*.
-* **`05` s/d `06`: Pipeline Mediapie & Preprocessing** - Skrip untuk penyiapan konversi aset video dataset dan pelacakan titik krusial wajah secara akurat.
+* **`01`, `02_A`, `05`: Analisis Eksploratif (EDA)** - Modul persiapan & penelusuran data pada *MRL Dataset* dan *NTHUD Dataset*.
+* **`02_B`, `05` s/d `06`: Pipeline Mediapie & Preprocessing** - Skrip untuk penyiapan konversi aset video dataset dan pelacakan titik krusial wajah secara akurat.
+* **`03` : pembuatan model SWIN dan experiment
 * **`07_A` & `07_B`**: **Module Ekstraktor Backcbone** - Penyesuaian arsitektur (Swin Transformer / Model CNN lain) untuk mengurai frame piksel menjadi *Frame Features*.
 * **08_Build_Sequences_30Frames_NTHU.ipynb**: Konversi fitur terpisah tadi menjadi matriks *time-series* untuk dibaca spesifik LSTM.
 * **`09_A` & `09_B` : Tahap Training & Tuning** - Pelatihan arsitektur LSTM/BiLSTM dan percobaan parameter berlapis (Model tuning dan optimasi parameter keselamatan).
