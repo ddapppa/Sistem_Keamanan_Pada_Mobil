@@ -1,0 +1,11 @@
+Memperbaiki jalur `Laptop Anda -> Server TURN Publik (berada di luar negeri/jauh) via TCP -> Cloudflare -> Server PC Anda -> Diproses -> Cloudflare -> TURN -> Laptop`.
+
+# Mencari tau bagaimana bobot di buat ringan
+
+# Membuat fuzzy logic untuk sistem
+
+# **Hyperparameter tuning di mdoel SWIN + LSTM**
+
+# Rentan terhadap distorsi geometri 2D
+
+# Data *sekuens* temporal yang digunakan perlu di tambah
