@@ -27,6 +27,7 @@
 
 
 import os
+import gc
 import csv
 import time
 import threading
@@ -52,7 +53,9 @@ except ImportError:
 
 
 from inference import DrowsinessDetector, USE_CUDA, DetectionResult
-
+import training_pipeline as tp
+import torch
+import cv2
 
 import base64
 
@@ -375,8 +378,8 @@ st.markdown("""
   }
 
 
-  p, li, div[data-testid="stMarkdownContainer"] p {
-    color: var(--ink-2);
+  p, li, div[data-testid="stMarkdownContainer"] p, div[data-testid="stText"] {
+    color: var(--ink-2) !important;
     line-height: 1.7;
     font-size: 0.95rem;
   }
@@ -1032,6 +1035,45 @@ st.markdown("""
   }
   [data-baseweb="select"] > div * { color: var(--ink) !important; }
 
+  /* ── Mengubah warna drop-down list (Popover Menu) menjadi Putih ── */
+  [data-baseweb="popover"],
+  [data-baseweb="popover"] > div,
+  div[data-testid="stSelectbox"] [data-baseweb="popover"] div,
+  [data-baseweb="menu"],
+  ul[role="listbox"],
+  div[role="listbox"] {
+    background-color: #FFFFFF !important;
+    border-radius: 10px !important;
+  }
+  
+  /* Teks di dalam pilihan dropdown menjadi Hitam/Gelap */
+  ul[role="listbox"] li,
+  div[role="listbox"] li,
+  [data-baseweb="popover"] li,
+  [data-baseweb="popover"] li span,
+  [data-baseweb="menu"] li {
+    background-color: #FFFFFF !important;
+    color: #1E293B !important;
+    font-weight: 500;
+  }
+
+  /* Warna saat salah satu pilihan di-hover */
+  ul[role="listbox"] li:hover,
+  div[role="listbox"] li:hover,
+  [data-baseweb="popover"] li:hover,
+  [data-baseweb="popover"] li:hover span {
+    background-color: #F0F9FF !important;
+    color: #0284C7 !important;
+  }
+
+  /* ── Input box biasa (seperti Number Input st.number_input) ── */
+  [data-baseweb="input"] > div {
+    border-radius: 10px !important;
+    border-color: var(--border-soft) !important;
+    background: #FFFFFF !important;
+  }
+  [data-baseweb="input"] > div * { color: var(--ink) !important; }
+
 
   /* ── Footer mark (shared) ── */
   .page-foot {
@@ -1102,6 +1144,76 @@ st.markdown("""
     .chapter-title { font-size: 2rem; }
     .mgrid { grid-template-columns: 1fr; }
     .dp-legend { font-size: 0.58rem; }
+  }
+
+  /* ── File Uploader Styling ── */
+  [data-testid="stFileUploaderDropzone"],
+  [data-testid="stFileUploadDropzone"],
+  section[data-testid="stFileUploaderDropzone"] {
+      background-color: #FFFFFF !important;
+      border: 2px dashed #0C4A6E !important;
+      border-radius: var(--radius) !important;
+  }
+  
+  [data-testid="stFileUploaderDropzone"] *,
+  [data-testid="stFileUploadDropzone"] * {
+      color: #0C4A6E !important;
+  }
+  
+  [data-testid="stFileUploaderDropzone"]:hover,
+  [data-testid="stFileUploadDropzone"]:hover {
+      background-color: #F0F9FF !important;
+      border-color: #0284C7 !important;
+  }
+  
+  [data-testid="stFileUploaderDropzone"]:hover *,
+  [data-testid="stFileUploadDropzone"]:hover * {
+      color: #0C4A6E !important;
+  }
+  
+  [data-testid="stFileUploaderDropzone"] button,
+  [data-testid="stFileUploadDropzone"] button {
+      background-color: #0C4A6E !important;
+      color: #FFFFFF !important;
+      border: none !important;
+      border-radius: 999px !important;
+      padding: 0.4rem 1rem !important;
+  }
+  
+  [data-testid="stFileUploaderDropzone"] button *,
+  [data-testid="stFileUploadDropzone"] button *,
+  [data-testid="stFileUploaderDropzone"] button span,
+  [data-testid="stFileUploadDropzone"] button span {
+      color: #FFFFFF !important;
+  }
+  
+  /* ── Samakan warna st.info() ── */
+  [data-testid="stAlert"],
+  [data-testid="stInfo"],
+  div[data-testid="stAlert"] {
+      background-color: #FFFFFF !important;
+      border: 2px dashed #0C4A6E !important;
+      border-radius: var(--radius) !important;
+  }
+  
+  [data-testid="stAlert"] *,
+  [data-testid="stInfo"] * {
+      color: #0C4A6E !important;
+  }
+  
+  [data-testid="stAlert"] svg,
+  [data-testid="stInfo"] svg {
+      fill: #0C4A6E !important;
+      color: #0C4A6E !important;
+  }
+  
+  /* ── Fix warna teks Spinner ── */
+  [data-testid="stSpinner"] * {
+      color: #1E293B !important;
+  }
+  [data-testid="stSpinner"] i {
+      border-top-color: #0284C7 !important;
+      border-right-color: #0284C7 !important;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -1260,7 +1372,30 @@ def _reset_stats(shared: dict):
 #  SESSION STATE
 # ============================================================
 def _init_session():
-    defaults = {"cam_key": 0}
+    defaults = {
+        "cam_key": 0,
+        "train_step": 1,
+        "train_ds_info": None,
+        "train_features": None,
+        "train_preproc_cfg": None,
+        "train_cfg": None,
+        "train_seq_len": 30,
+        "train_stride": 15,
+        "train_splits": None,
+        "train_norm_mean": None,
+        "train_norm_std": None,
+        "train_model": None,
+        "train_hist": None,
+        "train_metrics": None,
+        "train_best_state": None,
+        "export_paths": None,
+        "custom_model_pth": None,
+        "custom_model_npz": None,
+        "custom_model_label": None,
+        "active_model_mode": "bawaan",
+        "train_config_hash": None,
+        "nav_page": "Beranda",
+    }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -1300,22 +1435,15 @@ def _write_log_row(row: dict, enabled: bool):
 # ============================================================
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
-        self.session_id = None
-        n_frames = st.session_state.get("cfg_infer_n", 1)
-        self.log_enabled = st.session_state.get("cfg_log", False)
-        self.draw_mesh = st.session_state.get("cfg_mesh", True)
-        self.detector = DrowsinessDetector(infer_every_n=n_frames)
-
+        pass
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img_bgr = frame.to_ndarray(format="bgr24")
-        
-        # Tambahkan 2 baris ini untuk membalik gambar (menghilangkan efek mirror)
-        import cv2
         img_bgr = cv2.flip(img_bgr, 1)
 
         annotated, result = self.detector.process_frame(
             img_bgr, draw_mesh=self.draw_mesh
+            , flip_frame=False
         )
 
         my_session_id = self.session_id or "local_fallback"
@@ -1388,19 +1516,27 @@ st.sidebar.markdown(
 
 # Menu Bahasa Indonesia sesuai Figma
 _MENU_ITEMS = {
-    # "🏠  Beranda":  "Beranda",
-    # "ⓘ  Tentang":  "Tentang",
-    "📷  Demo":     "Demo",
-    # "✦  Fitur":    "Fitur",
-    # "✉  Kontak":   "Kontak",
+    "  Beranda":  "Beranda",
+    "  Tentang":  "Tentang",
+    "  Demo":     "Demo",
+    "  Pelatihan":"Pelatihan",
+    "  Fitur":    "Fitur",
+    "  Kontak":   "Kontak",
 }
+# BARU
+_keys = list(_MENU_ITEMS.keys())
+_active_index = next(
+    (i for i, k in enumerate(_keys) if _MENU_ITEMS[k] == st.session_state.nav_page),
+    0
+)
 _menu_display = st.sidebar.radio(
     "Navigasi",
-    list(_MENU_ITEMS.keys()),
-    index=0,
+    _keys,
+    index=_active_index,
     label_visibility="collapsed",
 )
 menu = _MENU_ITEMS[_menu_display]
+st.session_state.nav_page = menu   # sinkronisasi saat klik manual
 
 
 # Compute card bawah sidebar
@@ -1430,6 +1566,12 @@ def _page_footer():
     )
 
 
+def get_cfg_hash(cfg) -> str:
+    """Buat fingerprint dari config training untuk deteksi perubahan."""
+    import hashlib
+    cfg_str = f"{cfg.seq_len}_{cfg.stride}_{cfg.hidden_dim}_{cfg.num_layers}_{cfg.epochs}_{cfg.learning_rate}"
+    return hashlib.md5(cfg_str.encode()).hexdigest()[:8]
+
 # ============================================================
 #  BERANDA (Home)
 # ============================================================
@@ -1437,7 +1579,7 @@ if menu == "Beranda":
     # Hero
     st.markdown(
         '<div class="reveal">'
-        '<div class="bab-eyebrow">Computer Vision · Tesis 2026</div>'
+        '<div class="bab-eyebrow">Computer Vision </div>'
         '<div class="hero-title">Deteksi <em>Kantuk</em><br>'
         'Pengemudi <em>Real-time</em>.</div>'
         '<div class="hero-sub">Sistem analisis kelelahan mata pengemudi '
@@ -1450,15 +1592,16 @@ if menu == "Beranda":
     )
 
 
-    # CTA row — Streamlit buttons untuk navigasi halaman
+# CTA row — Streamlit buttons untuk navigasi halaman
     cta_l, cta_r, _ = st.columns([2, 2, 6], gap="small")
     with cta_l:
         if st.button("Coba Demo Langsung", key="cta_demo", use_container_width=True):
-            st.info("Buka menu **Demo** di sidebar untuk memulai webcam.")
+            st.session_state.nav_page = "Demo"
+            st.rerun()
     with cta_r:
         if st.button("Baca Pipeline", key="cta_pipe", use_container_width=True):
-            st.info("Buka menu **Tentang** di sidebar untuk membaca pipeline.")
-
+            st.session_state.nav_page = "Tentang"
+            st.rerun()
 
     # 4-col stat strip
     st.markdown(
@@ -1493,7 +1636,7 @@ if menu == "Beranda":
     with c_ds:
         st.markdown(
             '<div class="card reveal" style="height:100%;">'
-            '<div class="eyebrow-sm">📊 Dataset</div>'
+            '<div class="eyebrow-sm"> Dataset</div>'
             '<div class="card-title">NTHU-DDD2 + MRL Eye</div>'
             '<p class="muted">Korpus gabungan untuk pelatihan dan evaluasi '
             'yang menyatukan citra mata real-world dan video kantuk pengemudi.</p>'
@@ -1544,12 +1687,7 @@ if menu == "Beranda":
 elif menu == "Tentang":
     st.markdown(
         '<div class="reveal">'
-        '<div class="bab-eyebrow">Bab 02 · Metodologi</div>'
         '<div class="chapter-title">Pipeline <em>5 langkah</em>.</div>'
-        '<p class="muted" style="max-width:720px;">Setiap frame webcam '
-        'menempuh lima tahap pemrosesan — dari akuisisi citra hingga '
-        'keluaran peringatan — yang dirancang agar latensi tetap rendah '
-        'tanpa mengorbankan recall pada kondisi kantuk.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1607,7 +1745,7 @@ elif menu == "Demo":
         st_autorefresh(interval=300, key="live_panel_refresh")
     else:
         st.warning(
-            "⚠️ Install `streamlit-autorefresh` agar panel kanan update otomatis: "
+            " Install `streamlit-autorefresh` agar panel kanan update otomatis: "
             "`pip install streamlit-autorefresh`"
         )
 
@@ -1621,6 +1759,59 @@ elif menu == "Demo":
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # ============================================================
+    # PATCH 1: Model Selector di halaman Demo
+    # ============================================================
+    if "active_model_mode" not in st.session_state:
+        st.session_state["active_model_mode"] = "bawaan"
+
+    with st.container():
+        st.markdown("""
+        <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;
+                    padding:14px 20px;margin-bottom:16px;">
+            <span style="font-size:11px;font-weight:700;letter-spacing:.08em;
+                         color:#64748b;text-transform:uppercase;">MODEL AKTIF</span>
+        </div>
+        """, unsafe_allow_html=True)
+        col_sel, col_badge = st.columns([3, 1])
+
+        with col_sel:
+            model_choices = ["Model Bawaan (SWIN_LSTM_EXP_K_BEST)"]
+            custom_pth = st.session_state.get("custom_model_pth")
+            custom_npz = st.session_state.get("custom_model_npz")
+            custom_label = st.session_state.get("custom_model_label", "Custom Model")
+
+            if custom_pth and custom_npz:
+                model_choices.append(f"⚡ {custom_label} (Custom)")
+
+            selected_model = st.selectbox(
+                "Pilih Model untuk Inferensi",
+                options=model_choices,
+                key="demo_model_selector",
+                help="Pilih model bawaan (terlatih peneliti) atau model custom hasil pelatihan."
+            )
+
+            st.session_state["active_model_mode"] = (
+                "custom" if "Custom" in selected_model else "bawaan"
+            )
+
+        with col_badge:
+            if st.session_state["active_model_mode"] == "custom":
+                st.markdown("""
+                <div style="background:#dcfce7;color:#166534;border-radius:20px;
+                            padding:6px 14px;font-size:12px;font-weight:700;
+                            text-align:center;margin-top:28px;">
+                    ✓  CUSTOM AKTIF
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="background:#dbeafe;color:#1e40af;border-radius:20px;
+                            padding:6px 14px;font-size:12px;font-weight:700;
+                            text-align:center;margin-top:28px;">
+                    ◈  BAWAAN AKTIF
+                </div>""", unsafe_allow_html=True)
+    # ============================================================
 
 
     # ── Sidebar: pengaturan demo (tetap ada, fungsi tidak diubah) ─
@@ -1665,10 +1856,6 @@ elif menu == "Demo":
 
     # LEFT: Webcam panel
     with left_col:
-        st.markdown('<div class="card reveal" style="padding:1.4rem 1.4rem;">',
-                    unsafe_allow_html=True)
-
-
         # Idle preview placeholder (above actual WebRTC)
         st.markdown(
             '<div class="webcam-idle">'
@@ -1697,35 +1884,58 @@ elif menu == "Demo":
                 unsafe_allow_html=True,
             )
         with col_reset:
-            if st.button("🔄 Reset Camera", use_container_width=True):
+            if st.button(" Reset Camera", use_container_width=True):
                 _reset_stats(shared)
                 shared["alarm"].trigger("NORMAL")
                 st.session_state["cam_key"] += 1
                 st.rerun()
 
 
-        webrtc_ctx = webrtc_streamer( 
-            key                      = f"drowsiness-v{st.session_state['cam_key']}",
-            mode                     = WebRtcMode.SENDRECV,
-            rtc_configuration        = RTC_CONFIG,
-            media_stream_constraints = {
+        # ─── SNAPSHOT session_state di main thread ───────────────────
+        _active_mode = st.session_state.get("active_model_mode", "bawaan")
+        _custom_pth  = st.session_state.get("custom_model_pth")
+        _custom_npz  = st.session_state.get("custom_model_npz")
+        _infer_n     = st.session_state.get("cfg_infer_n", 1)
+        _draw_mesh   = st.session_state.get("cfg_mesh", True)
+        _log_enabled = st.session_state.get("cfg_log", False)
+
+        def make_processor():
+            vp = VideoProcessor.__new__(VideoProcessor)  # bypass __init__
+            vp.session_id  = None
+            vp.log_enabled = _log_enabled
+            vp.draw_mesh   = _draw_mesh
+            vp.detector    = DrowsinessDetector(infer_every_n=_infer_n)
+            if _active_mode == "custom" and _custom_pth and _custom_npz:
+                try:
+                    vp.detector.load_custom_lstm(_custom_pth, _custom_npz)
+                    print(f"[INFO] VideoProcessor: memakai model CUSTOM — {_custom_pth}")
+                except Exception as e:
+                    print(f"[ERROR] Gagal load custom model: {e}")
+                    print("[INFO] VideoProcessor: fallback ke model BAWAAN")
+            else:
+                print("[INFO] VideoProcessor: memakai model BAWAAN")
+            return vp
+
+        webrtc_ctx = webrtc_streamer(
+            key=f"drowsiness-v{st.session_state['cam_key']}",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTC_CONFIG,
+            media_stream_constraints={
                 "video": {
-                    "width":      {"ideal": vid_w},
-                    "height":     {"ideal": vid_h},
-                    "frameRate":  {"ideal": fps_choice},
+                    "width": {"ideal": vid_w},
+                    "height": {"ideal": vid_h},
+                    "frameRate": {"ideal": fps_choice},
                     "facingMode": "user",
                 },
                 "audio": False,
             },
-            video_processor_factory  = VideoProcessor,
-            async_processing         = True,
-            desired_playing_state    = None,
+            video_processor_factory=make_processor,
+            async_processing=True,
+            desired_playing_state=None,
         )
 
         if webrtc_ctx and webrtc_ctx.video_processor:
-            webrtc_ctx.video_processor.session_id = MY_SESSION_ID
-
-        st.markdown('</div>', unsafe_allow_html=True)
+            webrtc_ctx.video_processor.session_id = MY_SESSION_ID 
 
 
         # Tips operasional
@@ -1738,9 +1948,6 @@ elif menu == "Demo":
             'landmark optimal.</li>'
             '<li>Lepas kacamata reflektif jika confidence terus rendah '
             'di bawah 0.50.</li>'
-            '<li>Gunakan Frame Skip 2 atau 3 pada perangkat tanpa GPU '
-            'untuk menjaga FPS.</li>'
-            '<li>Aktifkan CSV Logger ketika menjalankan sesi rekam evaluasi.</li>'
             '</ul>'
             '</div>',
             unsafe_allow_html=True,
@@ -1759,10 +1966,6 @@ elif menu == "Demo":
         run_class  = {"PROSES": "pill-normal",
                       "MULAI":  "pill-info",
                       "MATI":   "pill-ghost"}.get(stats["run_state"], "pill-ghost")
-
-
-        st.markdown('<div class="card reveal" style="padding:1.5rem 1.4rem;">',
-                    unsafe_allow_html=True)
 
 
         # Header: STATUS pill + RUN STATE pill
@@ -1848,8 +2051,7 @@ elif menu == "Demo":
 
 
         # Alarm output card
-        import base64
-        import os
+        # NOTE: base64 dan os sudah diimport di atas (top-level)
 
         audio_file_path = os.path.join(os.path.dirname(__file__), "alarm_beep.mp3")
         try:
@@ -1873,7 +2075,7 @@ elif menu == "Demo":
         st.markdown(
             f'<div class="alarm-row">'
             f'<div class="al-left">'
-            f'<div class="al-ico">🔊</div>'
+            f'<div class="al-ico"></div>'
             f'<div>'
             f'<div class="al-title">Alarm Output</div>'
             f'<div class="al-body">Web Browser Audio Player</div>'
@@ -1885,9 +2087,551 @@ elif menu == "Demo":
         )
 
 
+    _page_footer()
+
+
+# ============================================================
+#  PELATIHAN (Manual Training)
+# ============================================================
+elif menu == "Pelatihan":
+    st.markdown(
+        '<div class="reveal">'
+        '<div class="bab-eyebrow">Bab 03 · Pelatihan Manual</div>'
+        '<div class="chapter-title">Latih <em>model kustom</em>.</div>'
+        '<p class="muted" style="max-width:720px;">Sesuaikan hyperparameter '
+        'dan latih model LSTM Anda sendiri langsung dari antarmuka ini. '
+        'Sistem akan mengekstrak fitur secara otomatis dengan Swin Transformer.</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Step Indicator
+    steps = ["1. Dataset", "2. statistik", "3. Preprocessing", "4. Ekstraksi Fitur", "5. Training", "6. Evaluasi", "7. Ekspor"]
+    current_step = st.session_state.train_step
+
+    st.markdown('<div style="display:flex; justify-content:space-between; margin-bottom: 2rem; border-bottom: 1px solid var(--border-soft); padding-bottom: 1rem;">', unsafe_allow_html=True)
+    for i, step_name in enumerate(steps, 1):
+        color = "var(--accent)" if i == current_step else "var(--ink)" if i < current_step else "var(--muted-soft)"
+        fw = "bold" if i == current_step else "normal"
+        st.markdown(f'<span style="color: {color}; font-weight: {fw};">{step_name}</span>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if current_step == 1:
+        st.markdown('<div class="card"><div class="card-title">1. Upload Dataset</div>', unsafe_allow_html=True)
+        ds_mode = st.radio("Jenis Input", ["Frame Images"], horizontal=True)
+        
+        uploaded_zip = st.file_uploader(
+            "Upload Dataset (.zip)",
+            type=["zip"],
+            help="Ukuran maksimal ditentukan oleh konfigurasi server. Untuk dataset besar, gunakan mode Frame Images."
+        )
+        st.info(" **Format File:** Harus berupa file `.zip` yang di dalamnya terdapat minimal 2 sub-folder seperti `Drowsy/` dan `NotDrowsy/`.")
+        
+        if uploaded_zip is not None:
+            file_size_mb = uploaded_zip.size / (1024 * 1024)
+            st.caption(f" Ukuran file: {file_size_mb:.1f} MB")
+            
+            if file_size_mb > 500:
+                st.warning(
+                    " File besar terdeteksi. Proses ekstraksi mungkin memakan waktu lebih lama. "
+                    "Pertimbangkan menggunakan mode **Frame Images** untuk dataset > 500MB."
+                )
+        
+        if st.button("Jalankan", type="primary"):
+            if uploaded_zip is None:
+                st.error("Silakan unggah file dataset (.zip) terlebih dahulu.")
+            else:
+                with st.spinner("Mengekstrak dan memvalidasi dataset..."):
+                    import zipfile
+                    import shutil
+                    
+                    # Buat folder sementara di dalam direktori proyek
+                    temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_dataset")
+                    
+                    # Bersihkan folder jika sudah ada
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                        except Exception as e:
+                            st.warning(f"Gagal membersihkan folder lama: {e}")
+                            
+                    os.makedirs(temp_dir, exist_ok=True)
+                    
+                    try:
+                        progress_text = st.empty()
+                        prog_bar = st.progress(0)
+                        
+                        def prep_cb(msg, curr, total):
+                            safe_val = min(curr / total, 1.0) if total > 0 else 0.0
+                            prog_bar.progress(safe_val)
+                            progress_text.markdown(f"<span style='color:#1E293B; font-weight:600;'>{msg}</span>", unsafe_allow_html=True)
+                            
+                        # Preprocess otomatis: ekstrak, resize, hapus corrupt, dedup
+                        stats = tp.preprocess_dataset_zip(
+                            uploaded_zip.getvalue(),
+                            temp_dir,
+                            target_size=224,
+                            progress_cb=prep_cb
+                        )
+                        
+                        if stats["errors"]:
+                            for err in stats["errors"]:
+                                st.error(err)
+                        else:
+                            st.success(
+                                f"Preprocess awal selesai! Input: {stats['total_input']} img, "
+                                f"Output: {stats['total_output']} img "
+                                f"(Dihapus: {stats['removed_corrupt']} corrupt, {stats['removed_duplicate']} duplikat)."
+                            )
+                            
+                            info = tp.validate_dataset_folder(stats["output_dir"])
+                            
+                            if info.is_valid:
+                                st.session_state.train_ds_info = info
+                                st.session_state.train_step = 2
+                                st.rerun()
+                            else:
+                                for err in info.errors:
+                                    st.error(err)
+                    except zipfile.BadZipFile:
+                        st.error("File yang diunggah rusak atau bukan file ZIP yang valid.")
+                    except Exception as e:
+                        st.error(f"Terjadi kesalahan saat memproses file: {e}")
+                        
         st.markdown('</div>', unsafe_allow_html=True)
 
+    elif current_step == 2:
+        st.markdown('<div class="card"><div class="card-title">2. Statistik Dataset</div>', unsafe_allow_html=True)
+        info = st.session_state.train_ds_info
+        
+        label_total = "Total Gambar" if info.mode == "frame_flat" else "Total Clips"
+        st.write(f" **{label_total}:** {info.total_clips}")
 
+        cols = st.columns(len(info.clips_per_class))
+        for idx, (label, count) in enumerate(info.clips_per_class.items()):
+            label_name = "Not Drowsy (1)" if label == 1 else "Drowsy (0)"
+            cols[idx].metric(label_name, count)
+            
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Kembali"):
+                st.session_state.train_step = 1
+                st.rerun()
+        with c2:
+            if st.button("Lanjut ke Preprocessing", type="primary"):
+                st.session_state.train_step = 3
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif current_step == 3:
+        st.markdown('<div class="card"><div class="card-title">3. Preprocessing</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            resize = st.selectbox("Resize Target", [224, 256, 384], index=0)
+            interp = st.selectbox("Interpolasi", ["LANCZOS", "BILINEAR", "BICUBIC"], index=0)
+            margin = st.slider("Eye Crop Margin", 0.0, 0.3, 0.18, 0.01)
+            is_pre = st.checkbox("Data Sudah Di-Crop (Bypass MediaPipe)", value=False)
+        with c2:
+            aug_hflip = st.checkbox("Horizontal Flip", value=True)
+            aug_rot = st.checkbox("Random Rotation", value=False)
+            aug_rot_deg = st.slider("Rotasi (Derajat)", 5, 30, 15) if aug_rot else 15
+        
+        st.session_state.train_preproc_cfg = tp.PreprocessConfig(
+            resize=resize, interpolation=interp, eye_crop_margin=margin,
+            is_pre_cropped=is_pre,
+            aug_hflip=aug_hflip, aug_rotation=aug_rot, aug_rotation_deg=aug_rot_deg
+        )
+        
+        if not is_pre:
+            if st.button("👁️ Preview Hasil Eye Crop"):
+                with st.spinner("Memproses preview..."):
+                    previews = tp.preview_eye_crops(st.session_state.train_ds_info, margin=margin, max_previews=3)
+                    if previews:
+                        cols = st.columns(len(previews))
+                        for idx, p in enumerate(previews):
+                            with cols[idx]:
+                                st.image([p['left_bgr'], p['right_bgr']], caption=[f"L ({p['label']})", f"R ({p['label']})"], channels="BGR")
+                    else:
+                        st.warning("Gagal membuat preview. Pastikan ada wajah terdeteksi.")
+        
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Kembali"):
+                st.session_state.train_step = 2
+                st.rerun()
+        with b2:
+            if st.button("Jalankan Preprocessing & Ekstraksi Fitur", type="primary"):
+                st.session_state.train_step = 4
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif current_step == 4:
+        st.markdown('<div class="card"><div class="card-title">4. Ekstraksi Fitur Swin</div>', unsafe_allow_html=True)
+        if st.session_state.train_features is None:
+            st.info("Mengekstrak fitur menggunakan Swin Transformer (pretrained). Ini mungkin membutuhkan waktu beberapa menit.")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            def pcb(msg, curr, total):
+                safe_val = min(curr / total, 1.0) if total > 0 else 0.0
+                progress_bar.progress(safe_val)
+                status_text.markdown(f"<span style='color:#1E293B; font-weight:600;'>{msg}</span>", unsafe_allow_html=True)
+                
+            b_col1, b_col2 = st.columns(2)
+            with b_col1:
+                if st.button("Kembali ke Preprocessing"):
+                    st.session_state.train_step = 3
+                    st.rerun()
+            with b_col2:
+                if st.button("Mulai Ekstraksi", type="primary"):
+                    with st.spinner("Memuat model Swin..."):
+                        swin_model = tp.load_swin_model()
+                    
+                    with st.spinner("Mengekstrak fitur..."):
+                        res = tp.process_full_dataset(
+                            st.session_state.train_ds_info,
+                            st.session_state.train_preproc_cfg,
+                            swin_model,
+                            progress_cb=pcb,
+                            seq_len=st.session_state.get("train_seq_len", 30)
+                        )
+                        st.session_state.train_features = res
+
+                        # MEMORY FIX — INI AKAR MASALAH UTAMA:
+                        # swin_model di atas dimuat ke VRAM/RAM HANYA untuk
+                        # ekstraksi fitur dan TIDAK PERNAH dibersihkan.
+                        # st.rerun() di bawah melempar exception untuk
+                        # menghentikan script saat ini, tapi itu TIDAK
+                        # menjamin tensor CUDA milik swin_model langsung
+                        # dilepas dari VRAM — variabel lokal ini bisa
+                        # menggantung di memori GPU.
+                        # Akibatnya: saat nanti halaman Demo membuat
+                        # DrowsinessDetector() baru (yang memuat Swin model
+                        # KEDUA + LSTM bawaan, ditambah LSTM custom jika
+                        # mode custom aktif), VRAM sudah terbebani sisa
+                        # model ekstraksi ini — beresiko gagal alokasi
+                        # CUDA dan mematikan proses Python tanpa traceback
+                        # yang rapi (persis seperti yang dialami).
+                        del swin_model
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                        st.success(f"Ekstraksi selesai! {res['valid_frames']} frame valid diproses.")
+                        st.rerun()
+        else:
+            res = st.session_state.train_features
+            st.success(f"Ekstraksi selesai! {res['valid_frames']} frame valid diproses dari total {res['total_frames']} frame.")
+            
+            st.subheader("Konfigurasi Sequence")
+            
+            if "train_seq_len" not in st.session_state:
+                st.session_state.train_seq_len = 30
+            if "train_stride" not in st.session_state:
+                st.session_state.train_stride = 15
+                
+            c1, c2 = st.columns(2)
+            with c1:
+                seq_opts = [15, 30, 45, 60]
+                idx = seq_opts.index(st.session_state.train_seq_len) if st.session_state.train_seq_len in seq_opts else 1
+                seq_len = st.selectbox("Sequence Length", seq_opts, index=idx, key="widget_seqlen")
+            with c2: 
+                stride = st.number_input("Stride", min_value=1, max_value=60, value=st.session_state.train_stride, key="widget_stride")
+                
+            st.session_state.train_seq_len = seq_len
+            st.session_state.train_stride = stride
+            
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Ekstrak Ulang"):
+                    st.session_state.train_features = None
+                    st.rerun()
+            with b2:
+                if st.button("Lanjut ke Training", type="primary"):
+                    st.session_state.train_step = 5
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif current_step == 5:
+        st.markdown('<div class="card"><div class="card-title">5. Hyperparameter Tuning</div>', unsafe_allow_html=True)
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            hidden_dim = st.selectbox("Hidden Dim", [128, 256, 512], index=1)
+            num_layers = st.selectbox("Num Layers", [1, 2, 3], index=1)
+            bidir = st.checkbox("Bidirectional", value=False)
+            attn = st.checkbox("Use Attention", value=True)
+        with c2:
+            lr = st.selectbox("Learning Rate", [1e-2, 1e-3, 5e-4, 1e-4], index=1)
+            batch = st.selectbox("Batch Size", [16, 32, 64, 128], index=1)
+            epochs = st.slider("Epochs", 5, 100, 50)
+            optim_ = st.selectbox("Optimizer", ["AdamW", "Adam", "SGD"], index=0)
+        with c3:
+            lstm_do = st.slider("LSTM Dropout", 0.0, 0.7, 0.3)
+            fc_do = st.slider("FC Dropout", 0.0, 0.7, 0.4)
+            fc_act = st.selectbox("FC Activation", ["gelu", "relu", "silu", "elu"], index=0)
+            sched = st.selectbox("Scheduler", ["OneCycleLR", "StepLR", "None"], index=0)
+            
+        cfg = tp.TrainingConfig(
+            hidden_dim=hidden_dim, num_layers=num_layers, bidirectional=bidir,
+            use_attention=attn, fc_activation=fc_act, lstm_dropout=lstm_do,
+            fc_dropout=fc_do, learning_rate=lr, batch_size=batch, epochs=epochs,
+            optimizer=optim_, scheduler=sched, seq_len=st.session_state.train_seq_len,
+            stride=st.session_state.train_stride
+        )
+        
+        st.subheader("Validasi Konfigurasi")
+        ds_size = st.session_state.train_ds_info.total_clips
+        msgs = tp.validate_hyperparameters(cfg, ds_size)
+        has_error = False
+        for m in msgs:
+            if m.level == "error":
+                st.error(m.message)
+                has_error = True
+            elif m.level == "warning":
+                st.warning(m.message)
+            else:
+                st.info(" " + m.message)
+        
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Kembali"):
+                st.session_state.train_step = 4
+                st.rerun()
+        with b2:
+            if not has_error:
+                if st.button("Mulai Training", type="primary"):
+                    new_hash = get_cfg_hash(cfg)
+                    
+                    if st.session_state.get('train_config_hash') != new_hash:
+                        st.session_state['train_metrics'] = None
+                        st.session_state['train_hist'] = None
+                        st.session_state['train_model'] = None
+                        st.session_state['export_paths'] = None
+                        st.session_state['train_config_hash'] = new_hash
+                        
+                    st.session_state.train_cfg = cfg
+                    with st.spinner("Membangun sequences..."):
+                        splits = tp.build_splits_with_sequences(
+                            st.session_state.train_features["clip_features"],
+                            st.session_state.train_features["clip_labels"],
+                            seq_len=cfg.seq_len, stride=cfg.stride,
+                            train_ratio=cfg.split_train, val_ratio=cfg.split_val
+                        )
+                        norm_mean, norm_std = tp.compute_norm_stats(splits["train"][0])
+                        
+                        st.session_state.train_splits = splits
+                        st.session_state.train_norm_mean = norm_mean
+                        st.session_state.train_norm_std = norm_std
+
+                    progress_text = st.empty()
+                    prog_bar = st.progress(0)
+                    
+                    def train_cb(ep, tot, mdict):
+                        prog_bar.progress((ep+1)/tot)
+                        progress_text.markdown(f"<span style='color:#1E293B; font-weight:600;'>Epoch {ep+1}/{tot} - Loss: {mdict['train_loss']:.4f} - Val F2: {mdict['val_f2']:.4f}</span>", unsafe_allow_html=True)
+                        
+                    with st.spinner("Training sedang berlangsung..."):
+                        model, hist, best_state = tp.train_lstm_model(
+                            cfg, splits, norm_mean, norm_std, progress_cb=train_cb
+                        )
+                        
+                        eval_metrics = tp.evaluate_model(model, splits["test"][0], splits["test"][1], norm_mean, norm_std)
+
+                        # MEMORY FIX: 'model' adalah objek PyTorch hidup
+                        # (parameter + graf, masih nempel di GPU/CPU).
+                        # Objek ini TIDAK pernah dibaca lagi di app.py —
+                        # export_model() hanya memakai 'best_state' (cpu
+                        # clone, jauh lebih ringan). Sebelumnya seluruh
+                        # objek model ikut disimpan ke session_state dan
+                        # menggantung sepanjang step 6+7, menambah beban
+                        # memori yang tidak perlu di atas train_features
+                        # yang juga masih ada. Jangan simpan ke session_state;
+                        # lepas referensinya & bersihkan cache di sini.
+                        del model
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                        st.session_state.train_hist = hist
+                        st.session_state.train_norm_mean = norm_mean
+                        st.session_state.train_norm_std = norm_std
+                        st.session_state.train_metrics = eval_metrics
+                        st.session_state.train_best_state = best_state
+                        
+                    st.session_state.train_step = 6
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif current_step == 6:
+        st.markdown('<div class="card"><div class="card-title">6. Evaluasi Model</div>', unsafe_allow_html=True)
+        metrics = st.session_state.train_metrics
+        hist = st.session_state.train_hist
+        
+        splits = st.session_state.get("train_splits")
+        if splits is None:
+            st.warning("⚠️ Data training tidak ditemukan. Silakan ulangi dari Step 5.")
+            if st.button("Kembali ke Training"):
+                st.session_state.train_step = 5
+                st.rerun()
+            st.stop()
+            
+        if 'train_cfg' in st.session_state:
+            cfg_used = st.session_state.train_cfg
+            splits_display = splits
+            train_seq = len(splits_display['train'][0])
+            val_seq   = len(splits_display['val'][0])
+            test_seq  = len(splits_display['test'][0])
+            total_seq = train_seq + val_seq + test_seq
+            
+            pct = lambda x: f"{x/total_seq*100:.0f}" if total_seq > 0 else "0"
+            
+            st.info(
+                f"📊 **Statistik Sequence (seqlen={cfg_used.seq_len}, stride={cfg_used.stride}):**  \n"
+                f"Total: **{total_seq}** sequences dari {st.session_state.train_ds_info.total_clips} frame  \n"
+                f"Train: **{train_seq}** ({pct(train_seq)}%) · "
+                f"Val: **{val_seq}** ({pct(val_seq)}%) · "
+                f"Test (Confusion Matrix): **{test_seq}** ({pct(test_seq)}%)  \n"
+                f"⚠️ Confusion Matrix dihitung dari **test set saja** ({test_seq} sequences) — ini benar secara metodologi."
+            )
+            
+            if test_seq < 30:
+                st.warning("⚠️ Perhatian: Test set kurang dari 30 sequence. Metrik evaluasi mungkin kurang stabil/reliabel.")
+
+        st.markdown(f"### F2-Score: {metrics.f2:.4f}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Accuracy", f"{metrics.accuracy:.4f}")
+        c2.metric("Precision", f"{metrics.precision:.4f}")
+        c3.metric("Recall", f"{metrics.recall:.4f}")
+        
+        if tp._PLT_AVAILABLE:
+            st.pyplot(tp.plot_training_curves(hist))
+            st.pyplot(tp.plot_confusion_matrix(metrics))
+            
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if st.button("Ulangi Training (Hyperparameter Baru)"):
+                st.session_state.train_step = 5
+                st.rerun()
+        with b2:
+            if st.button("Ubah Preprocessing"):
+                st.session_state.train_step = 3
+                st.rerun()
+        with b3:
+            if st.button("Lanjut Simpan Model", type="primary"):
+                st.session_state.train_step = 7
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    elif current_step == 7:
+        st.markdown("""<div class="card"><div class="card-title">7. Ekspor Model</div>""",
+                    unsafe_allow_html=True)
+        st.info("Simpan model Anda untuk digunakan nanti atau langsung gunakan di halaman Demo.")
+
+        # ── Jalankan ekspor jika belum ada ──────────────────────────────────────
+        if 'export_paths' not in st.session_state or st.session_state['export_paths'] is None:
+            try:
+                # FIX: path absolut berbasis lokasi app.py, bukan relatif
+                # terhadap current working directory (CWD). Path relatif
+                # "models/custom" sebelumnya bisa menulis ke folder yang
+                # salah tergantung dari mana Streamlit dijalankan (lokal
+                # vs SSH vs service), yang berisiko bikin file "tidak
+                # ditemukan" di langkah berikutnya walau penulisan sukses.
+                _models_dir = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "models", "custom"
+                )
+                os.makedirs(_models_dir, exist_ok=True)
+                paths = tp.export_model(
+                    st.session_state.train_best_state,
+                    st.session_state.train_cfg,
+                    st.session_state.train_norm_mean,
+                    st.session_state.train_norm_std,
+                    st.session_state.train_metrics,
+                    st.session_state.train_hist,
+                    _models_dir
+                )
+                if paths is None:
+                    st.error("❌ export_model() mengembalikan None. Cek fungsi export_model di training_pipeline.py.")
+                    st.stop()
+                # Verifikasi semua file benar-benar ada di disk
+                missing = [k for k, v in paths.items() if not os.path.exists(v)]
+                if missing:
+                    st.error(f"❌ File tidak terbuat: {missing}. Cek izin folder models/custom/")
+                    st.stop()
+                st.session_state['export_paths'] = paths
+
+                # MEMORY FIX: setelah file .pth/.npz/.json berhasil ditulis
+                # ke disk, semua informasi penting sudah aman tersimpan.
+                # Bersihkan memori di titik ini supaya beban RAM/VRAM turun
+                # sebelum lanjut render tombol download di bawah.
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception as e:
+                st.error(f"❌ Gagal ekspor model: {e}")
+                st.stop()
+
+        paths = st.session_state['export_paths']
+
+        # ── Tombol download ──────────────────────────────────────────────────────
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            with open(paths["pth"], "rb") as f:
+                st.download_button("Download .pth", f,
+                                   file_name=os.path.basename(paths["pth"]))
+        with c2:
+            with open(paths["npz"], "rb") as f:
+                st.download_button("Download .npz", f,
+                                   file_name=os.path.basename(paths["npz"]))
+        with c3:
+            with open(paths["json"], "rb") as f:
+                st.download_button("Download .json", f,
+                                   file_name=os.path.basename(paths["json"]))
+
+        zip_data = tp.create_zip_bundle(paths)
+        st.download_button("Download Semua (ZIP)", zip_data,
+                           file_name="drowsy_model_custom.zip",
+                           mime="application/zip", type="primary",
+                           use_container_width=True)
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+        col_retrain, col_new = st.columns(2)
+        with col_retrain:
+            if st.button("🔄 Pelatihan Ulang (Parameter Baru)", use_container_width=True):
+                # Reset hanya hasil training, pertahankan dataset & features
+                for k in ['train_metrics', 'train_hist', 'train_model',
+                          'train_best_state', 'export_paths', 'train_config_hash']:
+                    st.session_state[k] = None
+                st.session_state['train_step'] = 5
+                st.rerun()
+        with col_new:
+            if st.button("📂 Upload Dataset Baru", use_container_width=True):
+                # BUG-11 FIX: Bersihkan temp_dataset folder
+                import shutil
+                temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_dataset")
+                if os.path.exists(temp_dir):
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except Exception:
+                        pass
+                # Full reset semua state
+                for k in ['train_metrics', 'train_hist', 'train_model', 'train_best_state',
+                          'export_paths', 'train_features', 'train_ds_info',
+                          'train_cfg', 'train_config_hash']:
+                    st.session_state[k] = None
+                st.session_state['train_step'] = 1
+                st.rerun()
+
+        if st.button("▶ Gunakan di Demo", use_container_width=True):
+            st.session_state['custom_model_pth'] = paths["pth"]
+            st.session_state['custom_model_npz'] = paths["npz"]
+            st.session_state['custom_model_label'] = f"Custom_{os.path.basename(paths['pth']).replace('.pth','')}"
+            st.success("✅ Model custom siap! Silakan buka halaman Demo.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+    
     _page_footer()
 
 
@@ -1897,12 +2641,7 @@ elif menu == "Demo":
 elif menu == "Fitur":
     st.markdown(
         '<div class="reveal">'
-        '<div class="bab-eyebrow">Bab 04 · Kapabilitas</div>'
         '<div class="chapter-title">Dua belas <em>fitur inti</em>.</div>'
-        '<p class="muted" style="max-width:720px;">Setiap kapabilitas di '
-        'bawah ini diturunkan langsung dari kebutuhan eksperimen tesis: '
-        'stabilitas inferensi, kontrol false alarm, serta kemudahan '
-        'reproduksi hasil.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1931,20 +2670,18 @@ elif menu == "Fitur":
          "Resize halus 224×224 dilanjutkan normalisasi mengikuti "
          "distribusi MRL Eye (mean 0.3772, std 0.1544)."),
         ("08", "Swin + LSTM 30-Frame Sequence",
-         "Fitur Swin diumpankan ke LSTM dalam jendela sequence 30 frame "
+         "Fitur Swin diumpankan ke LSTM dalam jendela sequence  30 frame "
          "untuk memodelkan dinamika temporal."),
         ("09", "Three-Level Alert · Rolling Window 10",
-         "10 prediksi terakhir ditimbang: Normal 0–2 drowsy, Warning 3–6 "
-         "(alarm 3 detik), Danger 7–10 (alarm 6 detik)."),
-        ("10", "Winsound Beep — Stabil Tanpa Download",
-         "Alarm memakai winsound.Beep langsung. Tidak ada unduh audio, "
-         "tidak ada dependency sounddevice."),
-        ("11", "Frame-Skip 1/2/3 Performance Toggle",
-         "Pengaturan infer_every_n mengatur frekuensi panggilan GPU. N=1 "
-         "default akurasi maksimal, N=2/3 untuk menurunkan beban."),
-        ("12", "CSV Logger Otomatis",
-         "Setiap prediksi disimpan ke logs/ (timestamp, label, confidence, "
-         "prob drowsy, status, EAR, run_state) sebagai lampiran skripsi."),
+         "10 prediksi terakhir ditimbang: Normal 0–22 drowsy, Warning 23-29 "
+         "(alarm 3 detik), Danger 30 (alarm 6 detik)."),
+        ("10", "Alarm Pemberitahuan Real-Time Berbasis Browser",
+         "Alarm dipakai langsung melalui audio browser tanpa perangkat keras tambahan"),
+        ("11", "Pelatihan Manual dengan Hyperparameter Lengkap",
+         "Latih model LSTM kustom Anda dengan kontrol penuh atas arsitektur, "
+         "hyperparameter, dan dataset."),
+        ("12", "Penerapan Model Mandiri di Demo",
+         "Ekspor model yang dilatih dan gunakan langsung di halaman Demo untuk deteksi kantuk real-time."),
     ]
 
 
@@ -1970,14 +2707,12 @@ elif menu == "Fitur":
 elif menu == "Kontak":
     st.markdown(
         '<div class="reveal">'
-        '<div class="bab-eyebrow">Bab 05 · Kontak</div>'
         '<div class="chapter-title">Hubungi <em>peneliti</em>.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-
-    st.markdown(
+    st.markdown(      # ← tambah 4 spasi indentasi
         '<div class="contact-card reveal">'
         '<div class="eyebrow-sm">Project</div>'
         '<div class="card-title" style="margin-top:2px;">'
@@ -1990,7 +2725,13 @@ elif menu == "Kontak":
         '<a class="ig-pill" href="https://www.instagram.com/ddapppa/" '
         'target="_blank">'
         '<div class="ig-l">'
-        '<div class="ig-ico">📸</div>'
+        '<div class="ig-ico">'
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E1306C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>'
+        '<path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>'
+        '<line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>'
+        '</svg>'
+        '</div>'
         '<div>'
         '<div class="ig-lbl">Instagram</div>'
         '<div class="ig-val">@ddapppa</div>'
@@ -2001,6 +2742,5 @@ elif menu == "Kontak":
         '</div>',
         unsafe_allow_html=True,
     )
-
 
     _page_footer()
