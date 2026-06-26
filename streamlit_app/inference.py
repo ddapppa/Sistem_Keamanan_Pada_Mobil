@@ -3,7 +3,7 @@
 #  Drowsiness Detection System (Swin + LSTM)
 # ============================================================
 # ALUR CODE:
-# frame_bgr → flip non-mirror → MediaPipe (CPU) → landmark + multi-EAR (16-pt)
+# frame_bgr → optional flip non-mirror → MediaPipe (CPU) → landmark + multi-EAR (16-pt)
 #   → face loss tolerance check (FACE_LOSS_TOLERANCE_FRAMES)
 #   → cek face coverage (skip jika terlalu dekat)
 #   → CROP KEDUA MATA (16 landmark + margin 18%) sesuai training
@@ -150,8 +150,8 @@ MRL_IMG_STD  = [0.1544, 0.1544, 0.1544]
 
 SEQ_LEN        = 30    # frame per sekuens LSTM (= 1 detik @ 30fps)
 HISTORY_SIZE   = 30    # rolling window prediksi alert
-WARNING_THRESH = 23     # >= 3 drowsy dalam history → WARNING
-DANGER_THRESH  = 30    # >= 7 drowsy dalam history → DANGER
+WARNING_THRESH = 23     
+DANGER_THRESH  = 30  
 
 
 # [FIX-4] Confidence-gated rolling window
@@ -497,28 +497,6 @@ def _compute_ear_16pt(pts, eye_idx):
         return 0.0
 
 
-def _play_beep(level: str):
-    """
-    [DEPRECATED] Alarm beep — sekarang ditangani AlarmManager di app.py.
-    Fungsi ini disimpan untuk fallback standalone (tanpa Streamlit).
-    Tidak dipanggil otomatis oleh _eval_alert.
-    """
-    if platform.system().lower() != "windows":
-        return
-    def _run():
-        try:
-            import winsound
-            if level == "DANGER":
-                for _ in range(2):
-                    winsound.Beep(1320, 200)
-                    time.sleep(0.08)
-            elif level == "WARNING":
-                winsound.Beep(880, 150)
-        except Exception:
-            pass
-    threading.Thread(target=_run, daemon=True).start()
-
-
 # ============================================================
 #  KELAS DETEKTOR UTAMA
 # ============================================================
@@ -727,11 +705,11 @@ class DrowsinessDetector:
             pass
 
 
-        print("[WARNING] norm_stats tidak ditemukan. Fallback mean=0, std=1.")
-        print("         Jalankan cell export norm_stats di notebook 09_B!")
-        mean = torch.zeros(512, dtype=torch.float32, device=self.device)
-        std  = torch.ones(512,  dtype=torch.float32, device=self.device)
-        return mean, std
+        raise RuntimeError(
+            "[ERROR] norm_stats tidak ditemukan baik di npz maupun di checkpoint LSTM!\n"
+            "Sistem menolak fallback ke mean=0, std=1 karena dapat menyebabkan\n"
+            "distribusi input mismatch yang fatal. Pastikan norm_stats tersedia!"
+        )
 
 
     # ── Reset sesi (full) ────────────────────────────────────
@@ -743,6 +721,75 @@ class DrowsinessDetector:
         gc.collect()
         if USE_CUDA:
             torch.cuda.empty_cache()
+
+
+    # ── Load Custom LSTM (dari hasil training user) ──────────
+    def load_custom_lstm(self, pth_path: str, npz_path: str):
+        """
+        Ganti LSTM model dan norm stats dengan model custom.
+        Dipanggil dari app.py saat user memilih model custom di Demo.
+
+        Args:
+            pth_path: path ke file .pth checkpoint LSTM custom
+            npz_path: path ke file .npz norm stats custom
+        """
+        if not os.path.exists(pth_path):
+            raise FileNotFoundError(f"Custom LSTM model tidak ditemukan: {pth_path}")
+        if not os.path.exists(npz_path):
+            raise FileNotFoundError(f"Custom norm stats tidak ditemukan: {npz_path}")
+
+        print(f"[INFO] Loading custom LSTM: {pth_path}")
+        ckpt = torch.load(pth_path, map_location=self.device, weights_only=False)
+
+        cfg = {}
+        if isinstance(ckpt, dict):
+            cfg = ckpt.get("cfg", {})
+
+        # Bangun model LSTM baru dengan config dari checkpoint custom
+        new_lstm = DrowsinessLSTM(
+            input_dim     = 512,
+            hidden_dim    = cfg.get("hidden_dim",    256),
+            num_layers    = cfg.get("num_layers",    2),
+            num_classes   = 2,
+            bidirectional = cfg.get("bidirectional", False),
+            use_attention = cfg.get("use_attention", True),
+            lstm_dropout  = cfg.get("lstm_dropout",  0.3),
+            fc_dropout    = cfg.get("fc_dropout",    0.4),
+            fc_activation = cfg.get("fc_activation", "gelu"),
+        ).to(self.device)
+
+        state = (
+            ckpt.get("model_state", ckpt.get("model_state_dict", ckpt))
+            if isinstance(ckpt, dict) else ckpt
+        )
+        missing, unexpected = new_lstm.load_state_dict(state, strict=False)
+        if missing:
+            print(f"[WARNING] Custom LSTM — keys missing: {missing[:3]}")
+        new_lstm.eval()
+
+        print(
+            f"[INFO] Custom LSTM loaded — cfg: hidden={cfg.get('hidden_dim', 256)}, "
+            f"layers={cfg.get('num_layers', 2)}, "
+            f"act={cfg.get('fc_activation', 'gelu')}, "
+            f"bidir={cfg.get('bidirectional', False)}"
+        )
+
+        # Load custom norm stats
+        print(f"[INFO] Loading custom norm stats: {npz_path}")
+        data = np.load(npz_path)
+        new_mean = torch.tensor(data["mean"], dtype=torch.float32, device=self.device)
+        new_std  = torch.tensor(data["std"],  dtype=torch.float32, device=self.device)
+        new_std  = new_std.clamp(min=1e-8)
+        print(f"[INFO] Custom norm_stats loaded — mean.mean={new_mean.mean():.4f}")
+
+        # Ganti model dan stats yang aktif
+        self.lstm_model = new_lstm
+        self.norm_mean  = new_mean
+        self.norm_std   = new_std
+
+        # Reset buffer temporal agar tidak ada state dari model lama
+        self._reset_temporal_state()
+        print("[INFO] Custom LSTM swap complete — buffer direset")
 
 
     # ── Reset state temporal saja (auto, saat wajah hilang) ──
@@ -860,12 +907,13 @@ class DrowsinessDetector:
         self,
         frame_bgr: np.ndarray,
         draw_mesh: bool = True,
+        flip_frame: bool = True,
     ) -> Tuple[np.ndarray, DetectionResult]:
 
 
         t_start    = time.perf_counter()
-        # [FIX] Hapus cv2.flip / Nonaktifkan auto-mirroring
-        # frame_bgr  = cv2.flip(frame_bgr, 1)   # un-mirror (DIHAPUS)
+        if flip_frame:
+            frame_bgr = cv2.flip(frame_bgr, 1)
         h, w       = frame_bgr.shape[:2]
 
 
